@@ -1,0 +1,137 @@
+version: '3.8'
+
+services:
+
+  text-mongo:
+    image: mongo
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongodata:/data/db
+
+  text-llama-cpp:
+    image: ghcr.io/ggerganov/llama.cpp:server-cuda
+    
+    ports:
+      - "8000:8080"
+    volumes:
+      - "./data/llama-cpp:/models"
+    command: -m models/Higgs-Llama-3-70B.IQ4_NL.gguf -c 16384 --host 0.0.0.0 --port 8080 --n-gpu-layers 81 --parallel 4 --mlock --cont-batching --defrag-thold 0.1 --logit-bias 74694-inf --logit-bias 63-inf --logit-bias 14196-inf
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [ gpu ]
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+
+  audio-gpt-sovits:
+    image: markyfsun/gpt-sovits:latest
+    ports:
+      - "9880:9880"
+    volumes:
+      - "./data/gpt-sovits:/ref"
+    environment:
+      - SOVITS_MODEL_PATH=GPT_SoVITS/pretrained_models/s2G488k.pth
+      - GPT_MODEL_PATH=GPT_SoVITS/pretrained_models/s1bert25hz-2kh-longer-epoch=68e-step=50232.ckpt
+
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [ gpu ]
+
+  audio-chat-tts:
+    image: markyfsun/chat-tts:latest
+    ports:
+      - "9966:9966"
+
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [ gpu ]
+
+  audio-funasr:
+    image: markyfsun/funasr-online-cpu:latest
+    ports:
+      - "10095:10095"
+
+  audio-rvc:
+    image: markyfsun/rvc:latest
+    
+    ports:
+      - "8001:8001"
+    volumes:
+      - "./data/rvc:/app/assets/weights"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [ gpu ]
+
+  audio-musicgen:
+    image: markyfsun/musicgen:latest
+    ports:
+      - "8010:8010"
+    environment:
+      - TRANSFORMERS_OFFLINE=1
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [ gpu ]
+
+  image-stable-diffusion-webui:
+    image: markyfsun/stable-diffusion-webui-forge:latest
+    command: --no-half --no-half-vae --precision full --api --enable-insecure-extension-access --skip-install
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./data/stable-diffusion-webui/ui-config.json:/app/stable-diffusion-webui/ui-config.json
+      - ./data/stable-diffusion-webui/inputs:/app/stable-diffusion-webui/inputs
+      - ./data/stable-diffusion-webui/textual_inversion_templates:/app/stable-diffusion-webui/textual_inversion_templates
+      - ./data/stable-diffusion-webui/embeddings:/app/stable-diffusion-webui/embeddings
+      - ./data/stable-diffusion-webui/extensions:/app/stable-diffusion-webui/extensions
+      - ./data/stable-diffusion-webui/models:/app/stable-diffusion-webui/models
+      - ./data/stable-diffusion-webui/localizations:/app/stable-diffusion-webui/localizations
+      - ./data/stable-diffusion-webui/output:/app/stable-diffusion-webui/output
+    stop_signal: SIGKILL
+    tty: true
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [ gpu ]
+
+  image-sdxl-lighting:
+    image: markyfsun/sdxl-lighting-fastapi:latest
+    ports:
+      - "8100:8100"
+    environment:
+      - HF_HUB_OFFLINE=1
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [ gpu ]
+
+
+volumes:
+  mongodata:
