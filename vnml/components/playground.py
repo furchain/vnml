@@ -3,6 +3,8 @@ from functools import partial
 from typing import Iterator
 
 import reflex as rx
+from bs4 import BeautifulSoup
+from furchain.text.schema import LlamaCpp, ChatFormat
 
 
 @dataclass
@@ -12,15 +14,38 @@ class Diff:
     vnml: str
 
 
-def continue_vnml(vnml: str, option: str) -> Iterator[str]:
-    print(option)
-    # TODO: continue vnml
-    yield f"<button>{option}</button>"
-    yield f"<button2>{option}</button>"
-    yield f"<button3>{option}</button>"
+llm = LlamaCpp(chat_format=ChatFormat.Llama3)
+
+
+def continue_vnml(vnml: str, ) -> Iterator[str]:
+    print("vnml", vnml)
+    #     prompt = f'''```vnml
+    # <vnml lang="{DisplayState.lang}">
+    # {vnml}
+    # <!-- Continue with new scene, dialogue, options, and action based on the chosen action -->
+    # <scene>
+    # '''
+    #     result = llm.invoke(prompt, n_predict=50)
+    #     yield result
+    yield f"<scene><background keywords='magic shop, wards activated, tense atmosphere, magical traps set'/><music keywords='futuristic, electronic, fast-paced, synth, digital sounds, 21st century'/></scene>"
+
 
 
 def vnml2log(vnml: str) -> dict:
+    log = {
+        "character_url": None,
+        "character_name": None,
+        "dialogue": None,
+        "option_title": None,
+        "options": []
+    }
+    if vnml.startswith("<background"):
+        soup = BeautifulSoup(vnml, 'lxml')
+        background_keywords = soup.find("background")['keywords']
+        music_keywords = soup.find("music")['keywords']
+        return {"background_url": f"http://127.0.0.1:8100/image/{background_keywords}?width=1600&height=960",
+                "music_url": f"http://127.0.0.1:8010/music/{music_keywords}&seed=42", "option_title": None,
+                "options": []}
     return {"dialogue": vnml, "option_title": None, "options": []}
 
 
@@ -33,6 +58,7 @@ class GameSnapshot:
     dialogue: str
     option_title: str
     options: list[str]
+    characters: dict  # {"name": "identifier"}
 
     def __add__(self, diff: Diff):
         state = self.__dict__.copy()
@@ -58,7 +84,7 @@ def calculate_diff(snapshot: GameSnapshot, do_log: dict, vnml: str) -> Diff:
 class DisplayState(rx.State):
     background_url: str | None = None  #
     music_url: str | None = None
-    character_url: str | None = None  # "https://w7.pngwing.com/pngs/215/579/png-transparent-girl-graphy-portrait-asian-girl-thumbnail.png"
+    character_url: str | None = "/test.png"
     character_name: str | None = None
     dialogue: str | None = None  # "Hello, world!"
     option_title: str | None
@@ -72,6 +98,8 @@ class DisplayState(rx.State):
             vnml='')
     ]
     diff_pointer: int = -1
+    lang: str = 'en'
+    characters: dict = {}
 
     @property
     def last_button_active(self):
@@ -79,7 +107,7 @@ class DisplayState(rx.State):
 
     @property
     def next_button_active(self):
-        not self.diff_history[self.diff_pointer + 1]
+        return not self.diff_history[self.diff_pointer + 1]
 
     def export_snapshot(self) -> GameSnapshot:
         return GameSnapshot(
@@ -89,7 +117,8 @@ class DisplayState(rx.State):
             character_name=self.character_name,
             dialogue=self.dialogue,
             option_title=self.option_title,
-            options=self.options
+            options=self.options,
+            characters=self.characters
         )
 
     def import_snapshot(self, snapshot: GameSnapshot):
@@ -102,16 +131,22 @@ class DisplayState(rx.State):
         self.options = snapshot.options
 
     def select_option(self, option: str):
-        history_vnml = ''.join([i['vnml'] for i in self.diff_history[:self.diff_pointer]])
-        snapshot = self.export_snapshot()
-        for vnml in continue_vnml(history_vnml, option):
-            do_log = vnml2log(vnml)
-            diff = calculate_diff(snapshot, do_log, vnml)
-            self.diff_history.append(diff.__dict__)
-            snapshot += diff
+        self.diff_history.append(
+            {"do_log": {"dialogue": f"Option {option} selected", "option_title": None, "options": []},
+             "undo_log": {"dialogue": None, "option_title": self.option_title, "options": self.options},
+             "vnml": f"<action>{option}</action>"}
+        )
         self.forward()
 
     def forward(self):
+        if len(self.diff_history) <= self.diff_pointer + 1:
+            history_vnml = ''.join([i['vnml'] for i in self.diff_history[:self.diff_pointer]])
+            snapshot = self.export_snapshot()
+            for vnml in continue_vnml(history_vnml):
+                do_log = vnml2log(vnml)
+                diff = calculate_diff(snapshot, do_log, vnml)
+                self.diff_history.append(diff.__dict__)
+                snapshot += diff
         diff = self.diff_history[self.diff_pointer + 1]
         self.import_snapshot(self.export_snapshot() + Diff(**diff))
         self.diff_pointer += 1
@@ -143,7 +178,8 @@ def display_options() -> rx.Component:
 
 def display_controller() -> rx.Component:
     return rx.box(
-        rx.button("Go", on_click=DisplayState.forward),
+        rx.button("<-", on_click=DisplayState.backward),
+        rx.button("->", on_click=DisplayState.forward),
         background_color="rgba(255, 0, 255, 0.7)",  # half opacity
         justify_content="center",  # center the text horizontally
         align_items="center",  # center the text vertically
@@ -191,6 +227,23 @@ def display_dialogue() -> rx.Component:
     )
 
 
+def display_audio() -> rx.Component:
+    """The audio player.
+
+    Returns:
+        The audio player component.
+    """
+    return rx.audio(
+        url=DisplayState.music_url,
+        playing=True,
+        loop=True,
+        controls=False,
+        width="100%",
+        position="absolute",  # position it at the bottom left
+        bottom="0",  # position it at the bottom
+        left="0",  # position it at the left
+    )
+
 def playground() -> rx.Component:
     """The dashboard page.
 
@@ -204,6 +257,8 @@ def playground() -> rx.Component:
         children.append(display_character())
     if DisplayState.option_title is not None:
         children.append(display_options())
+    if DisplayState.music_url is not None:
+        children.append(display_audio())
     return rx.box(
         *children,
         display_controller(),

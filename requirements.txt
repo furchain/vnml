@@ -1,1 +1,4 @@
 reflex==0.5.4
+furchain
+bs4
+lxml
