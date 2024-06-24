@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
 
   text-mongo:
@@ -48,10 +46,10 @@ services:
               capabilities: [ gpu ]
 
   audio-chat-tts:
-    image: markyfsun/chat-tts:latest
-    ports:
-      - "9966:9966"
-
+    image: markyfsun/vnml-chat-tts:latest
+    container_name: vnml-dialogue
+    networks:
+      - vnml
     deploy:
       resources:
         reservations:
@@ -81,9 +79,10 @@ services:
               capabilities: [ gpu ]
 
   audio-musicgen:
-    image: markyfsun/musicgen:latest
-    ports:
-      - "8010:8010"
+    image: markyfsun/vnml-musicgen:latest
+    container_name: vnml-music
+    networks:
+      - vnml
     environment:
       - TRANSFORMERS_OFFLINE=1
     deploy:
@@ -96,11 +95,12 @@ services:
 
   image-stable-diffusion-webui:
     image: markyfsun/stable-diffusion-webui-forge:latest
+    container_name: vnml-character
     command: --no-half --no-half-vae --precision full --api --enable-insecure-extension-access --skip-install
-    ports:
-      - "8080:8080"
+    networks:
+      - vnml
     volumes:
-      - ./data/stable-diffusion-webui/ui-config.json:/app/stable-diffusion-webui/ui-config.json
+      #      - ./data/stable-diffusion-webui/ui-config.json:/app/stable-diffusion-webui/ui-config.json
       - ./data/stable-diffusion-webui/inputs:/app/stable-diffusion-webui/inputs
       - ./data/stable-diffusion-webui/textual_inversion_templates:/app/stable-diffusion-webui/textual_inversion_templates
       - ./data/stable-diffusion-webui/embeddings:/app/stable-diffusion-webui/embeddings
@@ -119,9 +119,10 @@ services:
               capabilities: [ gpu ]
 
   image-sdxl-lighting:
-    image: markyfsun/sdxl-lighting-fastapi:latest
-    ports:
-      - "8100:8100"
+    image: markyfsun/vnml-sdxl-lighting:latest
+    container_name: vnml-background
+    networks:
+      - vnml
     environment:
       - HF_HUB_OFFLINE=1
     deploy:
@@ -132,6 +133,24 @@ services:
               count: all
               capabilities: [ gpu ]
 
+  proxy-nginx:
+    image: nginx:latest
+    ports:
+      - "80:80"
+    volumes:
+      - ./data/nginx:/etc/nginx/conf.d
+    networks:
+      - vnml
+    depends_on:
+      - audio-musicgen
+      - audio-chat-tts
+      - image-stable-diffusion-webui
+      - image-sdxl-lighting
+
 
 volumes:
   mongodata:
+
+networks:
+  vnml:
+    driver: bridge

@@ -1,12 +1,18 @@
 from dataclasses import dataclass
 from functools import partial
 from typing import Iterator
+from urllib.parse import quote
 
 import reflex as rx
 from bs4 import BeautifulSoup
 from furchain.text.schema import LlamaCpp, ChatFormat
 
-
+BASE_URL = "http://127.0.0.1/"
+BACKGROUND_URL = f"{BASE_URL}image/"
+CHARACTER_URL = f"{BASE_URL}character/"
+MUSIC_URL = f"{BASE_URL}music/"
+dialogue_url = f"{BASE_URL}speech/"
+SEED = 42
 @dataclass
 class Diff:
     do_log: dict
@@ -32,20 +38,55 @@ def continue_vnml(vnml: str, ) -> Iterator[str]:
 
 
 def vnml2log(vnml: str) -> dict:
-    log = {
+    do_log = {
         "character_url": None,
         "character_name": None,
         "dialogue": None,
+        "dialogue_url": None,
         "option_title": None,
         "options": []
     }
-    if vnml.startswith("<background"):
+    if vnml.startswith("<scene"):
         soup = BeautifulSoup(vnml, 'lxml')
         background_keywords = soup.find("background")['keywords']
         music_keywords = soup.find("music")['keywords']
-        return {"background_url": f"http://127.0.0.1:8100/image/{background_keywords}?width=1600&height=960",
-                "music_url": f"http://127.0.0.1:8010/music/{music_keywords}&seed=42", "option_title": None,
-                "options": []}
+        background_keywords_encoded = quote(background_keywords, safe='')
+        music_keywords_encoded = quote(music_keywords, safe='')
+        do_log.update(
+            {"background_url": f"{BACKGROUND_URL}{background_keywords_encoded}?width=1600&height=960&seed={SEED}",
+             "music_url": f"{MUSIC_URL}{music_keywords_encoded}&seed={SEED}", "option_title": None,
+             "options": []})
+        return do_log
+    elif vnml.startswith("<character"):
+        soup = BeautifulSoup(vnml, 'lxml')
+        character_name = soup.find("character")['name']
+        character_identifier = soup.find("character").get("identifier",
+                                                          DisplayState.characters[character_name]["identifier"])
+        character_emotion = soup.find("character").get("emotion", DisplayState.characters[character_name]["emotion"])
+        dialogue = soup.find("dialogue").text.strip()
+        character_keywords_encoded = quote(f"{character_identifier},{character_emotion}", safe='')
+        do_log.update({
+            "character_url": f"{CHARACTER_URL}{character_keywords_encoded}&seed={SEED}",
+            "character_name": character_name,
+            "dialogue": dialogue,
+            "dialogue_url": f"{dialogue_url}{dialogue}"
+        })
+        DisplayState.characters["character_name"] = {
+            "identifier": character_identifier,
+            "emotion": character_emotion
+        }
+        return do_log
+    elif vnml.startswith("<narration"):
+        soup = BeautifulSoup(vnml, 'lxml')
+        dialogue = soup.find("narration").text.strip()
+        do_log.update({"dialogue": dialogue, "dialogue_url": f"{dialogue_url}{dialogue}"})
+        return do_log
+    elif vnml.startswith("<options"):
+        soup = BeautifulSoup(vnml, 'lxml')
+        option_title = soup.find("options")['title']
+        options = [i.text for i in soup.find_all("option")]
+        do_log.update({"option_title": option_title, "options": options})
+        return do_log
     return {"dialogue": vnml, "option_title": None, "options": []}
 
 
@@ -56,6 +97,7 @@ class GameSnapshot:
     character_url: str
     character_name: str
     dialogue: str
+    dialogue_url: str
     option_title: str
     options: list[str]
     characters: dict  # {"name": "identifier"}
@@ -87,6 +129,7 @@ class DisplayState(rx.State):
     character_url: str | None = "/test.png"
     character_name: str | None = None
     dialogue: str | None = None  # "Hello, world!"
+    dialogue_url: str | None = None
     option_title: str | None
     options: list[str] = []
     diff_history: list[dict] = [
@@ -116,6 +159,7 @@ class DisplayState(rx.State):
             character_url=self.character_url,
             character_name=self.character_name,
             dialogue=self.dialogue,
+            dialogue_url=self.dialogue_url,
             option_title=self.option_title,
             options=self.options,
             characters=self.characters
@@ -127,6 +171,7 @@ class DisplayState(rx.State):
         self.character_url = snapshot.character_url
         self.character_name = snapshot.character_name
         self.dialogue = snapshot.dialogue
+        self.dialogue_url = snapshot.dialogue_url
         self.option_title = snapshot.option_title
         self.options = snapshot.options
 
@@ -150,6 +195,8 @@ class DisplayState(rx.State):
         diff = self.diff_history[self.diff_pointer + 1]
         self.import_snapshot(self.export_snapshot() + Diff(**diff))
         self.diff_pointer += 1
+        if diff["do_log"].get("background_url"):  # new scene, automatically continue
+            self.forward()
 
     def backward(self):
         diff = self.diff_history[self.diff_pointer]
