@@ -1,4 +1,6 @@
+from typing import Dict
 from dataclasses import dataclass
+from pydantic import Field
 from functools import partial
 from typing import Iterator
 from urllib.parse import quote
@@ -8,10 +10,10 @@ from bs4 import BeautifulSoup
 from furchain.text.schema import LlamaCpp, ChatFormat
 
 BASE_URL = "http://127.0.0.1/"
-BACKGROUND_URL = f"{BASE_URL}image/"
+BACKGROUND_URL = f"{BASE_URL}background/"
 CHARACTER_URL = f"{BASE_URL}character/"
 MUSIC_URL = f"{BASE_URL}music/"
-dialogue_url = f"{BASE_URL}speech/"
+DIALOGUE_URL = f"{BASE_URL}dialogue/"
 SEED = 42
 @dataclass
 class Diff:
@@ -34,6 +36,7 @@ def continue_vnml(vnml: str, ) -> Iterator[str]:
     #     result = llm.invoke(prompt, n_predict=50)
     #     yield result
     yield f"<scene><background keywords='magic shop, wards activated, tense atmosphere, magical traps set'/><music keywords='futuristic, electronic, fast-paced, synth, digital sounds, 21st century'/></scene>"
+    yield f"<character name='Aria' identifier='shota, naked, penis' emotion='orgasm'>欢迎来到魔法的世界，在这里有新奇的冒险等待着你</character>"
 
 
 
@@ -60,18 +63,21 @@ def vnml2log(vnml: str) -> dict:
     elif vnml.startswith("<character"):
         soup = BeautifulSoup(vnml, 'lxml')
         character_name = soup.find("character")['name']
-        character_identifier = soup.find("character").get("identifier",
-                                                          DisplayState.characters[character_name]["identifier"])
-        character_emotion = soup.find("character").get("emotion", DisplayState.characters[character_name]["emotion"])
-        dialogue = soup.find("dialogue").text.strip()
+        character_identifier = soup.find("character").get("identifier")
+        if not character_identifier:
+            character_identifier = DisplayState._characters[character_name]["identifier"]
+        character_emotion = soup.find("character").get("emotion")
+        if not character_emotion:
+            character_emotion = DisplayState._characters[character_name]["emotion"]
+        dialogue = soup.find("character").text.strip()
         character_keywords_encoded = quote(f"{character_identifier},{character_emotion}", safe='')
         do_log.update({
             "character_url": f"{CHARACTER_URL}{character_keywords_encoded}&seed={SEED}",
             "character_name": character_name,
             "dialogue": dialogue,
-            "dialogue_url": f"{dialogue_url}{dialogue}"
+            "dialogue_url": f"{DIALOGUE_URL}{dialogue}"
         })
-        DisplayState.characters["character_name"] = {
+        DisplayState._characters["character_name"] = {
             "identifier": character_identifier,
             "emotion": character_emotion
         }
@@ -79,7 +85,7 @@ def vnml2log(vnml: str) -> dict:
     elif vnml.startswith("<narration"):
         soup = BeautifulSoup(vnml, 'lxml')
         dialogue = soup.find("narration").text.strip()
-        do_log.update({"dialogue": dialogue, "dialogue_url": f"{dialogue_url}{dialogue}"})
+        do_log.update({"dialogue": dialogue, "dialogue_url": f"{DIALOGUE_URL}{dialogue}"})
         return do_log
     elif vnml.startswith("<options"):
         soup = BeautifulSoup(vnml, 'lxml')
@@ -100,7 +106,7 @@ class GameSnapshot:
     dialogue_url: str
     option_title: str
     options: list[str]
-    characters: dict  # {"name": "identifier"}
+    characters: dict[str, dict] = Field(default_factory=dict)  # {"name": {"identifier": "value"}}
 
     def __add__(self, diff: Diff):
         state = self.__dict__.copy()
@@ -142,7 +148,7 @@ class DisplayState(rx.State):
     ]
     diff_pointer: int = -1
     lang: str = 'en'
-    characters: dict = {}
+    _characters: dict[str, dict] = {}
 
     @property
     def last_button_active(self):
@@ -162,7 +168,7 @@ class DisplayState(rx.State):
             dialogue_url=self.dialogue_url,
             option_title=self.option_title,
             options=self.options,
-            characters=self.characters
+            characters=self._characters
         )
 
     def import_snapshot(self, snapshot: GameSnapshot):
@@ -262,6 +268,7 @@ def display_dialogue() -> rx.Component:
     """
     return rx.box(
         rx.text(DisplayState.dialogue, color_scheme="cyan", size="6", style={"font-weight": "bold"}),
+        rx.audio(url=DisplayState.dialogue_url, controls=True, width="100%", playing=True, loop=False),
         padding="1em",
         border_radius="1em",
         background_color="rgba(255, 255, 255, 0.7)",  # half opacity
