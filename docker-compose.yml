@@ -1,0 +1,94 @@
+services:
+  #
+  #  text-mongo:
+  #    image: mongo
+  #    ports:
+  #      - "27017:27017"
+  #    volumes:
+  #      - mongodata:/data/db
+  #
+  #  text-llama-cpp:
+  #    image: ghcr.io/ggerganov/llama.cpp:server-cuda
+  #
+  #    ports:
+  #      - "8000:8080"
+  #    volumes:
+  #      - "./data/llama-cpp:/models"
+  #    command: -m models/Higgs-Llama-3-70B.IQ4_NL.gguf -c 16384 --host 0.0.0.0 --port 8080 --n-gpu-layers 81 --parallel 4 --mlock --cont-batching --defrag-thold 0.1 --logit-bias 74694-inf --logit-bias 63-inf --logit-bias 14196-inf
+  #    deploy:
+  #      resources:
+  #        reservations:
+  #          devices:
+  #            - driver: nvidia
+  #              count: all
+  #              capabilities: [ gpu ]
+  #    ulimits:
+  #      memlock:
+  #        soft: -1
+  #        hard: -1
+
+  audio-chat-tts:
+    image: markyfsun/vnml-chat-tts:latest
+    container_name: vnml-speech
+    networks:
+      - vnml
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [ gpu ]
+
+
+  audio-musicgen:
+    image: markyfsun/vnml-musicgen:latest
+    container_name: vnml-music
+    networks:
+      - vnml
+    environment:
+      - TRANSFORMERS_OFFLINE=1
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [ gpu ]
+
+  image-sdxl-lightning:
+    image: markyfsun/vnml-sdxl-lightning:latest
+    container_name: vnml-image
+    networks:
+      - vnml
+    environment:
+      - HF_HUB_OFFLINE=1
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [ gpu ]
+
+  proxy-nginx:
+    image: nginx:latest
+    ports:
+      - "80:80"
+    volumes:
+      - ./data/nginx:/etc/nginx/conf.d
+    networks:
+      - vnml
+    depends_on:
+      - audio-musicgen
+      - audio-chat-tts
+      - image-sdxl-lightning
+#      - text-llama-cpp
+
+
+volumes:
+  mongodata:
+
+networks:
+  vnml:
+    driver: bridge
