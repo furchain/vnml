@@ -1,6 +1,4 @@
-from typing import Dict
 from dataclasses import dataclass
-from pydantic import Field
 from functools import partial
 from typing import Iterator
 from urllib.parse import quote
@@ -8,13 +6,28 @@ from urllib.parse import quote
 import reflex as rx
 from bs4 import BeautifulSoup
 from furchain.text.schema import LlamaCpp, ChatFormat
+from pydantic import Field
 
 BASE_URL = "http://127.0.0.1/"
-BACKGROUND_URL = f"{BASE_URL}background/"
-CHARACTER_URL = f"{BASE_URL}character/"
-MUSIC_URL = f"{BASE_URL}music/"
-DIALOGUE_URL = f"{BASE_URL}dialogue/"
+
 SEED = 42
+
+
+def background_url(keywords, width, height, seed=SEED):
+    return f"{BASE_URL}image/cinematic,{quote(keywords, safe='')}?&width={width}&height={height}&seed={seed}"
+
+
+def character_url(identifier, emotion, width=1024, height=1024, seed=SEED):
+    return f"{BASE_URL}image/upper body,focus on face,{quote(f'{identifier},{emotion}', safe='')}?seed={seed}&rembg=true&height={height}&width={width}"
+
+
+def music_url(keywords, seed=SEED):
+    return f"{BASE_URL}music/{quote(keywords, safe='')}?seed={seed}"
+
+
+def dialogue_url(text, seed=SEED):
+    return f"{BASE_URL}speech/{quote(text)}?seed={seed}"
+
 @dataclass
 class Diff:
     do_log: dict
@@ -26,7 +39,6 @@ llm = LlamaCpp(chat_format=ChatFormat.Llama3)
 
 
 def continue_vnml(vnml: str, ) -> Iterator[str]:
-    print("vnml", vnml)
     #     prompt = f'''```vnml
     # <vnml lang="{DisplayState.lang}">
     # {vnml}
@@ -36,7 +48,8 @@ def continue_vnml(vnml: str, ) -> Iterator[str]:
     #     result = llm.invoke(prompt, n_predict=50)
     #     yield result
     yield f"<scene><background keywords='magic shop, wards activated, tense atmosphere, magical traps set'/><music keywords='futuristic, electronic, fast-paced, synth, digital sounds, 21st century'/></scene>"
-    yield f"<character name='Aria' identifier='shota, naked, penis' emotion='orgasm'>欢迎来到魔法的世界，在这里有新奇的冒险等待着你</character>"
+    yield f"<character name='Aria' identifier='magic girl' emotion='happy'>欢迎来到魔法的世界，在这里有新奇的冒险等待着你</character>"
+    yield "<options><title>hello</title><option>h1</option><option>h2</option></options>"
 
 
 
@@ -53,11 +66,9 @@ def vnml2log(vnml: str) -> dict:
         soup = BeautifulSoup(vnml, 'lxml')
         background_keywords = soup.find("background")['keywords']
         music_keywords = soup.find("music")['keywords']
-        background_keywords_encoded = quote(background_keywords, safe='')
-        music_keywords_encoded = quote(music_keywords, safe='')
         do_log.update(
-            {"background_url": f"{BACKGROUND_URL}{background_keywords_encoded}?width=1600&height=960&seed={SEED}",
-             "music_url": f"{MUSIC_URL}{music_keywords_encoded}&seed={SEED}", "option_title": None,
+            {"background_url": background_url(background_keywords, 1600, 960),
+             "music_url": music_url(music_keywords), "option_title": None,
              "options": []})
         return do_log
     elif vnml.startswith("<character"):
@@ -69,13 +80,12 @@ def vnml2log(vnml: str) -> dict:
         character_emotion = soup.find("character").get("emotion")
         if not character_emotion:
             character_emotion = DisplayState._characters[character_name]["emotion"]
-        dialogue = soup.find("character").text.strip()
-        character_keywords_encoded = quote(f"{character_identifier},{character_emotion}", safe='')
+        text = soup.find("character").text.strip()
         do_log.update({
-            "character_url": f"{CHARACTER_URL}{character_keywords_encoded}&seed={SEED}",
+            "character_url": character_url(character_identifier, character_emotion, ),
             "character_name": character_name,
-            "dialogue": dialogue,
-            "dialogue_url": f"{DIALOGUE_URL}{dialogue}"
+            "dialogue": text,
+            "dialogue_url": dialogue_url(text)
         })
         DisplayState._characters["character_name"] = {
             "identifier": character_identifier,
@@ -84,13 +94,13 @@ def vnml2log(vnml: str) -> dict:
         return do_log
     elif vnml.startswith("<narration"):
         soup = BeautifulSoup(vnml, 'lxml')
-        dialogue = soup.find("narration").text.strip()
-        do_log.update({"dialogue": dialogue, "dialogue_url": f"{DIALOGUE_URL}{dialogue}"})
+        text = soup.find("narration").text.strip()
+        do_log.update({"dialogue": text, "dialogue_url": dialogue_url(text)})
         return do_log
     elif vnml.startswith("<options"):
         soup = BeautifulSoup(vnml, 'lxml')
-        option_title = soup.find("options")['title']
-        options = [i.text for i in soup.find_all("option")]
+        option_title = soup.find("title").text.strip()
+        options = [i.text.strip() for i in soup.find_all("option")]
         do_log.update({"option_title": option_title, "options": options})
         return do_log
     return {"dialogue": vnml, "option_title": None, "options": []}
@@ -132,31 +142,22 @@ def calculate_diff(snapshot: GameSnapshot, do_log: dict, vnml: str) -> Diff:
 class DisplayState(rx.State):
     background_url: str | None = None  #
     music_url: str | None = None
-    character_url: str | None = "/test.png"
+    character_url: str | None = None
     character_name: str | None = None
     dialogue: str | None = None  # "Hello, world!"
     dialogue_url: str | None = None
     option_title: str | None
     options: list[str] = []
     diff_history: list[dict] = [
-        dict(do_log={
-            "background_url": "https://fastly.picsum.photos/id/576/200/300.jpg?hmac=Uf-okGnisfAphCT3N-WTyzaG-e-r9yvOhY3W43DMWwA",
-            "option_title": "Choose your destiny",
-            "options": ["Option 1", "Option 2"]},
-            undo_log={},
-            vnml='')
     ]
     diff_pointer: int = -1
     lang: str = 'en'
     _characters: dict[str, dict] = {}
 
-    @property
-    def last_button_active(self):
-        return self.diff_pointer > 0
+    @rx.var
+    def last_button_disabled(self) -> bool:
+        return self.diff_pointer <= 0
 
-    @property
-    def next_button_active(self):
-        return not self.diff_history[self.diff_pointer + 1]
 
     def export_snapshot(self) -> GameSnapshot:
         return GameSnapshot(
@@ -182,12 +183,14 @@ class DisplayState(rx.State):
         self.options = snapshot.options
 
     def select_option(self, option: str):
+        self.diff_history = self.diff_history[:self.diff_pointer]  # clear the future
         self.diff_history.append(
             {"do_log": {"dialogue": f"Option {option} selected", "option_title": None, "options": []},
              "undo_log": {"dialogue": None, "option_title": self.option_title, "options": self.options},
              "vnml": f"<action>{option}</action>"}
         )
         self.forward()
+
 
     def forward(self):
         if len(self.diff_history) <= self.diff_pointer + 1:
@@ -205,20 +208,17 @@ class DisplayState(rx.State):
             self.forward()
 
     def backward(self):
+        print(self.export_snapshot())
         diff = self.diff_history[self.diff_pointer]
         self.import_snapshot(self.export_snapshot() - Diff(**diff))
         self.diff_pointer -= 1
 
 
 def display_options() -> rx.Component:
-    children = [
-        rx.text(DisplayState.option_title, size="6", style={"font-weight": "bold"}),
-    ]
-    children += [
-        rx.foreach(DisplayState.options, lambda i: rx.button(i, on_click=partial(DisplayState.select_option, i)))]
-    return rx.box(
 
-        *children,
+    return rx.box(
+        rx.text(DisplayState.option_title, size="6", style={"font-weight": "bold"}),
+        rx.foreach(DisplayState.options, lambda i: rx.button(i, on_click=partial(DisplayState.select_option, i))),
         background_color="rgba(255, 0, 255, 0.7)",  # half opacity
         justify_content="center",  # center the text horizontally
         align_items="center",  # center the text vertically
@@ -231,7 +231,7 @@ def display_options() -> rx.Component:
 
 def display_controller() -> rx.Component:
     return rx.box(
-        rx.button("<-", on_click=DisplayState.backward),
+        rx.button("<-", on_click=DisplayState.backward, disabled=DisplayState.last_button_disabled),
         rx.button("->", on_click=DisplayState.forward),
         background_color="rgba(255, 0, 255, 0.7)",  # half opacity
         justify_content="center",  # center the text horizontally
@@ -243,23 +243,6 @@ def display_controller() -> rx.Component:
     )
 
 
-def display_character() -> rx.Component:
-    """The character image.
-
-    Returns:
-        The character image component.
-    """
-    return rx.image(
-        DisplayState.character_url,
-        width="100px",
-        height="100px",
-        border_radius="50%",
-        position="absolute",  # position it at the bottom left
-        bottom="0",  # position it at the bottom
-        left="0",  # position it at the left
-    )
-
-
 def display_dialogue() -> rx.Component:
     """The dialogue box.
 
@@ -267,17 +250,44 @@ def display_dialogue() -> rx.Component:
         The dialogue box component.
     """
     return rx.box(
-        rx.text(DisplayState.dialogue, color_scheme="cyan", size="6", style={"font-weight": "bold"}),
-        rx.audio(url=DisplayState.dialogue_url, controls=True, width="100%", playing=True, loop=False),
+        rx.text(DisplayState.dialogue, color_scheme="brown", size="5", style={"font-weight": "bold"},
+                justify_content="center",  # center the text horizontally
+                align_items="center",  # center the text vertically
+                width="100%",  # take the full width of the parent
+                display="flex",
+                padding="1em",
+                border_radius="1em",
+                background_color="rgba(255, 0, 255, 0.5)",  # half opacity
+                ),
+        rx.cond(
+            DisplayState.character_url,
+            rx.image(
+                DisplayState.character_url,
+                position="absolute",
+                width="512px",
+                height="512px",
+                bottom="0",  # position it at the bottom
+                z_index="-1",  # ensure it's on bottom of the dialogue box
+            )
+        ),
+        rx.audio(
+            url=DisplayState.dialogue_url,
+            playing=True,
+            controls=False,
+            width="0",
+            height="0",
+            position="absolute",  # position it at the bottom left
+            bottom="0",  # position it at the bottom
+            left="0",  # position it at the left
+        ),
         padding="1em",
         border_radius="1em",
-        background_color="rgba(255, 255, 255, 0.7)",  # half opacity
-        margin="1em",
         width="fit-content",
         position="absolute",  # position it at the center bottom
+        height="fit-content",
         bottom="0",  # position it at the bottom
         left="50%",  # position it at the center
-        transform="translate(-50%, -50%)"  # ensure it's centered
+        transform="translate(-50%)"  # ensure it's centered
     )
 
 
@@ -292,7 +302,8 @@ def display_audio() -> rx.Component:
         playing=True,
         loop=True,
         controls=False,
-        width="100%",
+        height="0",
+        width="0",
         position="absolute",  # position it at the bottom left
         bottom="0",  # position it at the bottom
         left="0",  # position it at the left
@@ -304,17 +315,20 @@ def playground() -> rx.Component:
     Returns:
         The UI for the dashboard page.
     """
-    children = []
-    if DisplayState.dialogue is not None:
-        children.append(display_dialogue())
-    if DisplayState.character_url is not None:
-        children.append(display_character())
-    if DisplayState.option_title is not None:
-        children.append(display_options())
-    if DisplayState.music_url is not None:
-        children.append(display_audio())
+
     return rx.box(
-        *children,
+        rx.cond(
+            DisplayState.dialogue,
+            display_dialogue()
+        ),
+        rx.cond(
+            DisplayState.option_title,
+            display_options()
+        ),
+        rx.cond(
+            DisplayState.music_url,
+            display_audio()
+        ),
         display_controller(),
         width="1280px",
         height="720px",
