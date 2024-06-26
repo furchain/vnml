@@ -39,6 +39,7 @@ services:
             - driver: nvidia
               count: all
               capabilities: [ gpu ]
+#              device_ids: [ "1" ]
 
 
   audio-musicgen:
